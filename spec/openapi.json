@@ -1,0 +1,561 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Takarda Results API",
+    "description": "Result checking, PIN purchase, school export, employer verification, and amendment recording for the National Secondary Certificate Council. Paper design exercise, this spec is not backed by a running service.\n",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Ehimare Okosun"
+    },
+    "license": {
+      "name": "Proprietary",
+      "identifier": "LicenseRef-Takarda-Internal"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.takarda.ng/v1",
+      "description": "Production (v1)"
+    }
+  ],
+  "paths": {
+    "/pin-purchases": {
+      "post": {
+        "operationId": "createPinPurchase",
+        "summary": "Buy a result-checker PIN",
+        "description": "Not safe, not idempotent at the HTTP level. Duplicate-charge safety is handled by the PENDING/CONFIRMED/FAILED/PROCESSING state machine described in ADR-004, not by an HTTP idempotency mechanism, since the payment partner does not accept an idempotency key.\n",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PinPurchaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Purchase attempt created (may resolve to CONFIRMED, FAILED, or PROCESSING)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinPurchaseAttempt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or malformed candidate identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Payment partner unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pin-purchases/{attemptId}": {
+      "get": {
+        "operationId": "getPinPurchaseStatus",
+        "summary": "Check the status of a PIN purchase attempt",
+        "description": "Used by a candidate whose purchase returned PROCESSING, to poll for resolution after reconciliation runs.\n",
+        "security": [],
+        "parameters": [
+          {
+            "name": "attemptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current status of the attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PinPurchaseAttempt"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{examNumber}": {
+      "get": {
+        "operationId": "getCandidateResult",
+        "summary": "Candidate fetches their own results for one sitting",
+        "description": "Safe and idempotent. During the results-day burst window this is served from a pre-computed cache (ADR-001). Outside the burst window it is served from a database read replica.\n",
+        "security": [
+          {
+            "candidatePin": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "examNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Identifies the candidate's result resource."
+          },
+          {
+            "name": "sitting",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-05"
+            },
+            "description": "Filter/scope parameter, narrows which sitting's result to return. Not part of resource identity.\n"
+          },
+          {
+            "name": "pin",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Credential proving entitlement to see this result. May instead be supplied as a header at implementation time, documented here as a query parameter for readability.\n"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The candidate's results for the requested sitting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or malformed exam number or sitting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid PIN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PIN exhausted (all five checks used)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No result found for this exam number and sitting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schools/{schoolId}/results": {
+      "get": {
+        "operationId": "getSchoolResults",
+        "summary": "School fetches all results for its own candidates, one sitting",
+        "description": "Safe and idempotent. Returns only candidates registered to this school.",
+        "security": [
+          {
+            "schoolApiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schoolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sitting",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "2026-05"
+            },
+            "description": "Filter/scope parameter, narrows which sitting's results to return."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full result list for this school's candidates in the given sitting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResultSet"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid school API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown school or sitting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/certificates/{certificateNumber}/verification": {
+      "get": {
+        "operationId": "verifyCertificate",
+        "summary": "Employer verifies one certificate",
+        "description": "Safe and idempotent. Returns only the fields printed on the certificate (ADR-008), never the candidate's other subjects, address, phone number, or examination centre.\n",
+        "security": [
+          {
+            "employerMutualTls": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "certificateNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dob",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Authorization check, compared after the certificate is found by its number, not a search key.\n"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result (valid, with restricted fields, or not verified)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or malformed certificate number or date of birth",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/results/{examNumber}/amendments": {
+      "patch": {
+        "operationId": "recordAmendment",
+        "summary": "Officer records an amendment to a result",
+        "description": "Not safe, not idempotent. Creates a new result version every call. The original version is preserved, marked superseded, never edited in place (ADR-002).\n",
+        "security": [
+          {
+            "officerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "examNumber",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmendmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Amendment recorded, new result version created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing reason code or officer ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid officer credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such result to amend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "candidatePin": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "pin",
+        "description": "Short-lived, per-check credential (exam number + PIN combination)."
+      },
+      "schoolApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-School-Api-Key",
+        "description": "Long-lived key issued per school, per ADR-006."
+      },
+      "employerMutualTls": {
+        "type": "mutualTLS",
+        "description": "Client certificate presented by the employers' association, per ADR-006."
+      },
+      "officerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Internal officer credential, per ADR-002 / ADR-008."
+      }
+    },
+    "schemas": {
+      "PinPurchaseRequest": {
+        "type": "object",
+        "required": [
+          "candidateId",
+          "amountKobo"
+        ],
+        "properties": {
+          "candidateId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "example": 350000,
+            "description": "Whole number of kobo. 3,500 naira = 350000 kobo."
+          }
+        }
+      },
+      "PinPurchaseAttempt": {
+        "type": "object",
+        "properties": {
+          "attemptId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "CONFIRMED",
+              "FAILED",
+              "PROCESSING"
+            ]
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when status is CONFIRMED."
+          }
+        }
+      },
+      "ResultSet": {
+        "type": "object",
+        "properties": {
+          "examNumber": {
+            "type": "string"
+          },
+          "sitting": {
+            "type": "string"
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "grade": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "versionNumber": {
+            "type": "integer"
+          }
+        }
+      },
+      "VerificationResult": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean"
+          },
+          "subjects": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": {
+                  "type": "string"
+                },
+                "grade": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Present only when verified is true, restricted to the certificate's own subjects."
+          }
+        }
+      },
+      "AmendmentRequest": {
+        "type": "object",
+        "required": [
+          "officerId",
+          "reasonCode",
+          "newGrade",
+          "subject"
+        ],
+        "properties": {
+          "officerId": {
+            "type": "string"
+          },
+          "reasonCode": {
+            "type": "string"
+          },
+          "reasonText": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "newGrade": {
+            "type": "string"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
